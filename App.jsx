@@ -72,8 +72,23 @@ export default function HealthApp() {
     })();
   }, []);
 
-  const saveData = async (newData) => {
+  const sendLineNotify = async (type, content) => {
+    try {
+      await fetch('/api/notify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type, content }),
+      });
+    } catch (e) {
+      console.error('LINE通知失敗', e);
+    }
+  };
+
+  const saveData = async (newData, notifyType, notifyContent) => {
     setData(newData);
+    if (notifyType && notifyContent) {
+      sendLineNotify(notifyType, notifyContent);
+    }
     try {
       for (const record of newData.records) {
         const { data: existing } = await supabase
