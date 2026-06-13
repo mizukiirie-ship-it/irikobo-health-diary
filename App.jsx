@@ -163,7 +163,11 @@ function FatherView({ data, saveData, todayKey }) {
     const baseText = exerciseCategory === 'その他' ? (exerciseInput || `運動 ${stepsInput}歩`) : exerciseCategory;
     const newEx = { id: Date.now(), category: exerciseCategory, text: baseText, steps: stepsInput ? parseInt(stepsInput) : null, startTime: startTimeInput || null, duration: durationInput ? parseInt(durationInput) : null, time: new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }) };
     const target = getRecordForDate(exerciseDate);
-    await saveData(updateRecordForDate(exerciseDate, { ...target, exercises: [...target.exercises, newEx] }));
+await saveData(
+  updateRecordForDate(exerciseDate, { ...target, exercises: [...target.exercises, newEx] }),
+  'exercise',
+  `${newEx.category}${newEx.duration ? ` ${newEx.duration}分` : ''}${newEx.steps ? ` ${newEx.steps}歩` : ''}`
+);
     setExerciseInput(''); setStepsInput(''); setStartTimeInput(''); setDurationInput('');
     setExerciseCategory('ウォーキング'); setExerciseDate(todayKey);
   };
@@ -171,7 +175,11 @@ function FatherView({ data, saveData, todayKey }) {
   const saveMood = async () => {
     if (!moodInput.trim()) return;
     const target = getRecordForDate(moodDate);
-    await saveData(updateRecordForDate(moodDate, { ...target, mood: moodInput }));
+    await saveData(
+  updateRecordForDate(moodDate, { ...target, mood: moodInput }),
+  'mood',
+  moodInput
+);
     setMoodInput(''); setMoodDate(todayKey);
   };
   const handlePhotoSelect = async (e) => {
@@ -183,7 +191,11 @@ function FatherView({ data, saveData, todayKey }) {
     if (!pendingPhoto && !foodNameInput.trim()) return;
     const newMeal = { id: Date.now(), photo: pendingPhoto, category: mealCategory, foodName: foodNameInput || mealCategory, calories: caloriesInput ? parseInt(caloriesInput) : null, time: new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }) };
     const target = getRecordForDate(mealDate);
-    await saveData(updateRecordForDate(mealDate, { ...target, meals: [...target.meals, newMeal] }));
+    await saveData(
+  updateRecordForDate(mealDate, { ...target, meals: [...target.meals, newMeal] }),
+  'meal',
+  `${newMeal.category}：${newMeal.foodName}${newMeal.calories ? ` ${newMeal.calories}kcal` : ''}`
+);
     setPendingPhoto(null); setFoodNameInput(''); setCaloriesInput(''); setMealCategory('朝食'); setMealDate(todayKey);
   };
   const deleteMeal = async (id) => { await saveData(updateTodayRecord({ ...todayRecord, meals: todayRecord.meals.filter(m => m.id !== id) })); };
