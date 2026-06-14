@@ -107,6 +107,10 @@ export default function HealthApp() {
   }; 
 return (
     <div style={{
+      minHeight: '100vh',const isDaughter = new URLSearchParams(window.location.search).get('mode') === 'daughter';
+
+  return (
+    <div style={{
       minHeight: '100vh',
       background: 'linear-gradient(135deg, #FAF3E3 0%, #F5E8D0 100%)',
       fontFamily: '"Hiragino Maru Gothic ProN", "Yu Gothic", sans-serif',
