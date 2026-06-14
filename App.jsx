@@ -452,7 +452,7 @@ function buildPeriodData(records, period, todayKey) {
 function periodTitle(p) { return { '7days': '7日間', '30days': '30日間', '3months': '3ヶ月', '1year': '1年間' }[p] || ''; }
 function formatStepsCompact(n) { if (n >= 10000) return (n / 10000).toFixed(1) + '万'; if (n >= 1000) return (n / 1000).toFixed(1) + 'k'; return String(n); }
 
-function PastRecordsCard({ records, todayKey, onDeleteExercise, onDeleteMeal, onDeleteMood }) {
+function PastRecordsCard({ records, comments, todayKey, onDeleteExercise, onDeleteMeal, onDeleteMood }) {
   const [expandedDate, setExpandedDate] = useState(null);
   const [expandedMonth, setExpandedMonth] = useState(null);
   const [selectedPhoto, setSelectedPhoto] = useState(null);
