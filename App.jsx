@@ -104,10 +104,13 @@ export default function HealthApp() {
     } catch (e) {
       console.error('保存失敗', e);
     }
-  }; 
-return (
+  };
+
+  const isDaughter = new URLSearchParams(window.location.search).get('mode') === 'daughter';
+
+  return (
     <div style={{
-      minHeight: '100vh',const isDaughter = new URLSearchParams(window.location.search).get('mode') === 'daughter';
+      minHeight: '100vh',
 
   return (
     <div style={{
