@@ -599,3 +599,112 @@ const categoryColors = { '朝食': { bg: '#FFE4B5', fg: '#8B5A2B' }, '昼食': {
 function categoryBadgeStyle(cat) { const c = categoryColors[cat] || categoryColors['食事']; return { display: 'inline-block', padding: '3px 10px', borderRadius: '10px', fontSize: '12px', fontWeight: 700, background: c.bg, color: c.fg, whiteSpace: 'nowrap' }; }
 const exerciseColors = { 'ウォーキング': { bg: '#D4E8C8', fg: '#3D5A2B' }, 'エアロバイク': { bg: '#C8DDE8', fg: '#2B4A5A' }, 'ストレッチ': { bg: '#E8D4D4', fg: '#5A3D3D' }, 'その他': { bg: '#FAF3E3', fg: '#8B5A2B' } };
 function exerciseBadgeStyle(cat) { const c = exerciseColors[cat] || exerciseColors['その他']; return { display: 'inline-block', padding: '3px 10px', borderRadius: '10px', fontSize: '12px', fontWeight: 700, background: c.bg, color: c.fg, whiteSpace: 'nowrap' }; }
+function DaughterView({ data, saveData, todayKey }) {
+  const [commentInput, setCommentInput] = useState('');
+  const [sending, setSending] = useState(false);
+
+  const sendComment = async () => {
+    if (!commentInput.trim()) return;
+    setSending(true);
+    const newComment = {
+      id: String(Date.now()),
+      text: commentInput,
+      timestamp: new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
+    };
+    try {
+      await supabase.from('comments').insert({
+        id: newComment.id,
+        text: newComment.text,
+        timestamp: newComment.timestamp,
+      });
+      setData_local({ ...data, comments: [newComment, ...data.comments] });
+    } catch (e) {
+      console.error('コメント送信失敗', e);
+    }
+    setCommentInput('');
+    setSending(false);
+  };
+
+  const deleteComment = async (id) => {
+    await supabase.from('comments').delete().eq('id', id);
+    await saveData({ ...data, comments: data.comments.filter(c => c.id !== id) });
+  };
+
+  const todayRecord = data.records.find(r => r.date === todayKey) || { date: todayKey, exercises: [], meals: [], mood: '' };
+  const totalSteps = todayRecord.exercises.reduce((s, e) => s + (e.steps || 0), 0);
+  const totalDuration = todayRecord.exercises.reduce((s, e) => s + (e.duration || 0), 0);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+      <Card accent>
+        <SectionTitle icon="👧">娘として見る</SectionTitle>
+        <p style={{ margin: '6px 0 0 0', fontSize: '13px', color: '#5C4033' }}>お父さんの記録を見てコメントを送れます</p>
+      </Card>
+
+      <Card>
+        <SectionTitle icon="📅">今日の記録（{formatDate(todayKey)}）</SectionTitle>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', marginTop: '12px' }}>
+          <Stat label="歩数" value={totalSteps || '-'} unit="歩" small />
+          <Stat label="運動" value={totalDuration || '-'} unit="分" small />
+          <Stat label="食事" value={todayRecord.meals.length} unit="食" small />
+        </div>
+        {todayRecord.exercises.length > 0 && (
+          <div style={{ marginTop: '12px' }}>
+            {todayRecord.exercises.map(ex => (
+              <div key={ex.id} style={{ background: '#FAF3E3', padding: '8px 12px', borderRadius: '8px', marginTop: '6px', fontSize: '13px', color: '#3D2817' }}>
+                <span style={exerciseBadgeStyle(ex.category)}>{ex.category}</span>
+                {(ex.duration || ex.steps) && <span style={{ marginLeft: '8px', color: '#8B5A2B' }}>{ex.duration && `${ex.duration}分`}{ex.steps && ` ・${ex.steps}歩`}</span>}
+              </div>
+            ))}
+          </div>
+        )}
+        {todayRecord.meals.length > 0 && (
+          <div style={{ marginTop: '12px' }}>
+            {todayRecord.meals.map(meal => (
+              <div key={meal.id} style={{ background: '#FAF3E3', padding: '8px 12px', borderRadius: '8px', marginTop: '6px', fontSize: '13px', color: '#3D2817', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={categoryBadgeStyle(meal.category)}>{meal.category}</span>
+                <span>{meal.foodName}</span>
+                {meal.calories && <span style={{ color: '#8B5A2B' }}>{meal.calories}kcal</span>}
+              </div>
+            ))}
+          </div>
+        )}
+        {todayRecord.mood && (
+          <div style={{ marginTop: '12px', background: '#FFF8E7', padding: '10px 12px', borderRadius: '8px', borderLeft: '3px solid #D4A574', fontSize: '13px', color: '#3D2817' }}>
+            💭 {todayRecord.mood}
+          </div>
+        )}
+      </Card>
+
+      <Card>
+        <SectionTitle icon="💌">コメントを送る</SectionTitle>
+        <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+            {['すごい！', 'よく歩いたね👏', '食事バランスいいね', '無理しないでね', 'いい感じ！'].map(t => (
+              <button key={t} onClick={() => setCommentInput(prev => prev + t)} style={{ padding: '6px 12px', fontSize: '12px', color: '#8B5A2B', background: '#FAF3E3', border: '1px solid #F0E2C9', borderRadius: '20px', cursor: 'pointer' }}>{t}</button>
+            ))}
+          </div>
+          <textarea placeholder="メッセージを入力..." value={commentInput} onChange={e => setCommentInput(e.target.value)} rows={3} style={{ ...inputStyle, resize: 'vertical' }} />
+          <button onClick={sendComment} disabled={sending} style={{ ...primaryButtonStyle, opacity: sending ? 0.7 : 1 }}>
+            {sending ? '送信中...' : '💌 送る'}
+          </button>
+        </div>
+      </Card>
+
+      {data.comments.length > 0 && (
+        <Card>
+          <SectionTitle icon="📝">送ったコメント</SectionTitle>
+          {data.comments.map(c => (
+            <div key={c.id} style={{ background: '#FFF8E7', padding: '12px', borderRadius: '12px', marginTop: '8px', borderLeft: '4px solid #D4A574', display: 'flex', gap: '8px' }}>
+              <div style={{ flex: 1 }}>
+                <p style={{ margin: 0, fontSize: '14px', color: '#3D2817' }}>{c.text}</p>
+                <p style={{ margin: '4px 0 0 0', fontSize: '11px', color: '#8B5A2B' }}>{c.timestamp}</p>
+              </div>
+              <button onClick={() => deleteComment(c.id)} style={deleteBtnStyle}>×</button>
+            </div>
+          ))}
+        </Card>
+      )}
+    </div>
+  );
+}
