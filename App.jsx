@@ -467,8 +467,15 @@ function PastRecordsCard({ records, todayKey, onDeleteExercise, onDeleteMeal, on
   });
   const olderMonths = Object.keys(olderRecordsByMonth).sort().reverse();
 
-  function DayDetail({ dateKey, r }) {
+  function DayDetail({ dateKey, r, dayComments }) {
     return <div style={{ padding: '0 4px 12px 4px' }}>
+      {dayComments && dayComments.length > 0 && <div style={{ marginBottom: '10px' }}>
+        <strong style={{ fontSize: '12px', color: '#8B5A2B' }}>💌 娘からのコメント</strong>
+        {dayComments.map(c => <div key={c.id} style={{ background: '#FFF8E7', padding: '8px 12px', borderRadius: '8px', marginTop: '6px', borderLeft: '3px solid #D4A574' }}>
+          <p style={{ margin: 0, fontSize: '13px', color: '#3D2817' }}>{c.text}</p>
+          <p style={{ margin: '4px 0 0 0', fontSize: '11px', color: '#8B5A2B' }}>{c.timestamp}</p>
+        </div>)}
+      </div>}
       {r.exercises.length > 0 && <div style={{ marginBottom: '10px' }}>
         <strong style={{ fontSize: '12px', color: '#8B5A2B' }}>🚶 運動</strong>
         {r.exercises.map(ex => <div key={ex.id} style={{ background: '#FAF3E3', padding: '8px 12px', borderRadius: '8px', marginTop: '6px', display: 'flex', alignItems: 'center', gap: '8px' }}>
