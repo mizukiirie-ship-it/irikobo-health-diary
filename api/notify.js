@@ -13,14 +13,13 @@ export default async function handler(req, res) {
 
   const message = `🐕 いりこぼ健康日記\n${typeLabel}が記録されました！\n\n${content}`;
 
-  await fetch('https://api.line.me/v2/bot/message/push', {
+  await fetch('https://api.line.me/v2/bot/message/broadcast', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${token}`,
     },
     body: JSON.stringify({
-      to: userId,
       messages: [{ type: 'text', text: message }],
     }),
   });
