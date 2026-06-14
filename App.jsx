@@ -63,7 +63,7 @@ export default function HealthApp() {
         const { data: rows } = await supabase.from('records').select('*');
         const { data: commentRows } = await supabase.from('comments').select('*').order('created_at', { ascending: false });
         const records = rows ? rows.map(r => JSON.parse(r.data)) : [];
-        const comments = commentRows ? commentRows.map(c => ({ id: c.id, text: c.text, timestamp: c.timestamp })) : [];
+       const comments = commentRows ? commentRows.map(c => ({ id: c.id, text: c.text, timestamp: c.timestamp, date: c.date })) : [];
         setData({ records, comments });
       } catch (e) {
         console.log('初回起動');
