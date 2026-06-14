@@ -108,9 +108,7 @@ export default function HealthApp() {
 
   const isDaughter = new URLSearchParams(window.location.search).get('mode') === 'daughter';
 
-  return (
-    <div style={{
-      minHeight: '100vh',
+
 
   return (
     <div style={{
