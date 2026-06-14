@@ -613,10 +613,11 @@ function DaughterView({ data, saveData, todayKey }) {
       timestamp: new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
     };
     try {
-      await supabase.from('comments').insert({
+    await supabase.from('comments').insert({
         id: newComment.id,
         text: newComment.text,
         timestamp: newComment.timestamp,
+        date: todayKey,
       });
       await saveData({ ...data, comments: [newComment, ...data.comments] });
     } catch (e) {
