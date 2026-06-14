@@ -130,6 +130,8 @@ return (
       <main style={{ padding: '20px', maxWidth: '500px', margin: '0 auto' }}>
         {!loaded ? (
           <div style={{ textAlign: 'center', color: '#8B5A2B', padding: '40px' }}>読み込み中...</div>
+      ) : isDaughter ? (
+          <DaughterView data={data} saveData={saveData} todayKey={todayKey} />
         ) : (
           <FatherView data={data} saveData={saveData} todayKey={todayKey} />
         )}
