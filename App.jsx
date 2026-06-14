@@ -259,7 +259,7 @@ await saveData(
             </div>)}
           </div>
         </Card>
-        <PastRecordsCard records={data.records} todayKey={todayKey}
+        <PastRecordsCard records={data.records} comments={data.comments} todayKey={todayKey}
           onDeleteExercise={async (date, id) => { const r = getRecordForDate(date); await saveData(updateRecordForDate(date, { ...r, exercises: r.exercises.filter(e => e.id !== id) })); }}
           onDeleteMeal={async (date, id) => { const r = getRecordForDate(date); await saveData(updateRecordForDate(date, { ...r, meals: r.meals.filter(m => m.id !== id) })); }}
           onDeleteMood={async (date) => { const r = getRecordForDate(date); await saveData(updateRecordForDate(date, { ...r, mood: '' })); }}
