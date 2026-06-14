@@ -525,7 +525,7 @@ function PastRecordsCard({ records, comments, todayKey, onDeleteExercise, onDele
           <span style={{ fontSize: '12px', color: '#8B5A2B' }}>{isExpanded ? '▲' : '▼'}</span>
         </div>
       </button>
-     {isExpanded && hasData && <DayDetail dateKey={dateKey} r={r} dayComments={records.filter ? undefined : undefined} />}
+    {isExpanded && hasData && <DayDetail dateKey={dateKey} r={r} dayComments={(comments || []).filter(c => c.date === dateKey)} />}
     </div>;
   }
 
