@@ -620,7 +620,7 @@ function DaughterView({ data, saveData, todayKey }) {
         text: newComment.text,
         timestamp: newComment.timestamp,
       });
-      setData_local({ ...data, comments: [newComment, ...data.comments] });
+      await saveData({ ...data, comments: [newComment, ...data.comments] });
     } catch (e) {
       console.error('コメント送信失敗', e);
     }
