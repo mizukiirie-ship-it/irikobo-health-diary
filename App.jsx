@@ -209,7 +209,7 @@ await saveData(
 
   const totalSteps = todayRecord.exercises.reduce((s, e) => s + (e.steps || 0), 0);
   const totalDuration = todayRecord.exercises.reduce((s, e) => s + (e.duration || 0), 0);
-  const recentComments = data.comments.slice(-3).reverse();
+  const recentComments = data.comments.slice(0, 3);
   const periodData = buildPeriodData(data.records, period, todayKey);
   const maxSteps = Math.max(...periodData.map(d => d.steps), 1000);
   const maxDuration = Math.max(...periodData.map(d => d.duration), 30);
