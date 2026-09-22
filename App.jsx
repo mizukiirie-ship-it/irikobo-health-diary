@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { createClient } from '@supabase/supabase-js';
 
 const supabase = createClient(
@@ -40,6 +40,52 @@ export default function HealthApp() {
   const [data, setData] = useState({ records: [], comments: [] });
   const [todayKey, setTodayKey] = useState(getJapanDateKey());
   const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+  const [saveError, setSaveError] = useState(false);
+  const lastLoadRef = useRef(0);
+
+  const loadAll = useCallback(async (force = false) => {
+    // フォーカス/表示復帰のたびに叩かれるので10秒以内の連続再取得は抑制
+    const now = Date.now();
+    if (!force && now - lastLoadRef.current < 10000) return;
+    lastLoadRef.current = now;
+    let ok = true;
+    // 写真(base64)込みで重いため、直近100日を先に表示してから残りを読む
+    const cutoff = shiftDateKey(getJapanDateKey(), -100);
+    try {
+      const { data: recentRows, error } = await supabase
+        .from('records').select('*').gte('date', cutoff).order('date');
+      if (error) throw error;
+      setData(prev => ({ ...prev, records: mergeRecordRows(recentRows || []) }));
+      setLoaded(true);
+      const { data: olderRows, error: olderError } = await supabase
+        .from('records').select('*').lt('date', cutoff).order('date');
+      if (olderError) throw olderError;
+      if (olderRows && olderRows.length > 0) {
+        setData(prev => {
+          const existingDates = new Set(prev.records.map(r => r.date));
+          const olderRecords = mergeRecordRows(olderRows).filter(r => !existingDates.has(r.date));
+          return { ...prev, records: [...prev.records, ...olderRecords] };
+        });
+      }
+    } catch (e) {
+      console.error('記録の読み込み失敗', e);
+      ok = false;
+    }
+    try {
+      const { data: commentRows, error } = await supabase
+        .from('comments').select('*').order('created_at', { ascending: false });
+      if (error) throw error;
+      setData(prev => ({ ...prev, comments: (commentRows || []).map(c => ({ id: c.id, text: c.text, timestamp: c.timestamp, date: c.date })) }));
+    } catch (e) {
+      console.error('コメントの読み込み失敗', e);
+      ok = false;
+    }
+    setLoadError(!ok);
+    setLoaded(true);
+  }, []);
+
+  useEffect(() => { loadAll(true); }, [loadAll]);
 
   useEffect(() => {
     const checkDate = () => {
@@ -47,30 +93,16 @@ export default function HealthApp() {
       setTodayKey(prev => prev !== newKey ? newKey : prev);
     };
     const interval = setInterval(checkDate, 5000);
-    const onVisibility = () => { if (!document.hidden) checkDate(); };
+    const refresh = () => { checkDate(); loadAll(); };
+    const onVisibility = () => { if (!document.hidden) refresh(); };
     document.addEventListener('visibilitychange', onVisibility);
-    window.addEventListener('focus', checkDate);
+    window.addEventListener('focus', refresh);
     return () => {
       clearInterval(interval);
       document.removeEventListener('visibilitychange', onVisibility);
-      window.removeEventListener('focus', checkDate);
+      window.removeEventListener('focus', refresh);
     };
-  }, []);
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const { data: rows } = await supabase.from('records').select('*');
-        const { data: commentRows } = await supabase.from('comments').select('*').order('created_at', { ascending: false });
-        const records = rows ? rows.map(r => JSON.parse(r.data)) : [];
-       const comments = commentRows ? commentRows.map(c => ({ id: c.id, text: c.text, timestamp: c.timestamp, date: c.date })) : [];
-        setData({ records, comments });
-      } catch (e) {
-        console.log('初回起動');
-      }
-      setLoaded(true);
-    })();
-  }, []);
+  }, [loadAll]);
 
   const sendLineNotify = async (type, content) => {
     try {
@@ -84,27 +116,42 @@ export default function HealthApp() {
     }
   };
 
-  const saveData = async (newData, notifyType, notifyContent) => {
-    setData(newData);
-    if (notifyType && notifyContent) {
-      sendLineNotify(notifyType, notifyContent);
-    }
+  // 変更のあった1日分だけを、DBの最新状態に適用して保存する。
+  // 画面のstateではなく保存直前にDBから読んだ内容を基準にすることで、
+  // 古い画面のまま操作しても他端末で保存済みの記録を巻き戻さない。
+  const mutateRecord = async (date, mutate, notifyType, notifyContent) => {
+    setSaveError(false);
     try {
-      for (const record of newData.records) {
-        const { data: existing } = await supabase
-          .from('records').select('id').eq('date', record.date).single();
-        if (existing) {
-          await supabase.from('records')
-            .update({ data: JSON.stringify(record) }).eq('date', record.date);
-        } else {
-          await supabase.from('records')
-            .insert({ date: record.date, data: JSON.stringify(record) });
+      const { data: rows, error } = await supabase
+        .from('records').select('*').eq('date', date).order('created_at');
+      if (error) throw error;
+      const current = mergeRecordRows(rows || [])[0] || { date, exercises: [], meals: [], mood: '' };
+      const updated = { ...mutate(current), date };
+      const json = JSON.stringify(updated);
+      if (rows && rows.length > 0) {
+        const { error: updateError } = await supabase
+          .from('records').update({ data: json }).eq('id', rows[0].id);
+        if (updateError) throw updateError;
+        if (rows.length > 1) {
+          // 過去の不具合でできた同一日付の重複行は、マージ済みの1行に統合して削除
+          await supabase.from('records').delete().in('id', rows.slice(1).map(r => r.id));
         }
+      } else {
+        const { error: insertError } = await supabase
+          .from('records').insert({ date, data: json });
+        if (insertError) throw insertError;
       }
+      setData(prev => ({ ...prev, records: [...prev.records.filter(r => r.date !== date), updated] }));
+      if (notifyType && notifyContent) sendLineNotify(notifyType, notifyContent);
+      return true;
     } catch (e) {
       console.error('保存失敗', e);
+      setSaveError(true);
+      return false;
     }
   };
+
+  const updateComments = (updater) => setData(prev => ({ ...prev, comments: updater(prev.comments) }));
 
   const isDaughter = new URLSearchParams(window.location.search).get('mode') === 'daughter';
 
@@ -129,19 +176,26 @@ export default function HealthApp() {
         </div>
       </header>
       <main style={{ padding: '20px', maxWidth: '500px', margin: '0 auto' }}>
+        {saveError && <div style={errorBannerStyle}>
+          ⚠️ 保存に失敗しました。電波の良い場所でもう一度お試しください。
+        </div>}
+        {loadError && <div style={errorBannerStyle}>
+          ⚠️ 記録の読み込みに失敗しました。
+          <button onClick={() => loadAll(true)} style={{ marginLeft: '8px', padding: '4px 12px', fontSize: '13px', fontWeight: 600, color: '#8B2B2B', background: '#FFF', border: '1px solid #E8A5A5', borderRadius: '8px', cursor: 'pointer' }}>再読み込み</button>
+        </div>}
         {!loaded ? (
           <div style={{ textAlign: 'center', color: '#8B5A2B', padding: '40px' }}>読み込み中...</div>
       ) : isDaughter ? (
-          <DaughterView data={data} saveData={saveData} todayKey={todayKey} />
+          <DaughterView data={data} updateComments={updateComments} todayKey={todayKey} />
         ) : (
-          <FatherView data={data} saveData={saveData} todayKey={todayKey} />
+          <FatherView data={data} mutateRecord={mutateRecord} todayKey={todayKey} />
         )}
       </main>
     </div>
   );
 }
 
-function FatherView({ data, saveData, todayKey }) {
+function FatherView({ data, mutateRecord, todayKey }) {
   const [activeTab, setActiveTab] = useState('record');
   const [exerciseCategory, setExerciseCategory] = useState('ウォーキング');
   const [exerciseInput, setExerciseInput] = useState('');
@@ -161,32 +215,25 @@ function FatherView({ data, saveData, todayKey }) {
 
   const todayRecord = data.records.find(r => r.date === todayKey) || { date: todayKey, exercises: [], meals: [], mood: '' };
 
-  function getRecordForDate(d) { return data.records.find(r => r.date === d) || { date: d, exercises: [], meals: [], mood: '' }; }
-  function updateRecordForDate(d, newRecord) { return { ...data, records: [...data.records.filter(r => r.date !== d), newRecord] }; }
-  function updateTodayRecord(newRecord) { return updateRecordForDate(todayKey, newRecord); }
-
   const addExercise = async () => {
     if (exerciseCategory === 'その他' && !exerciseInput.trim() && !stepsInput.trim()) return;
     const baseText = exerciseCategory === 'その他' ? (exerciseInput || `運動 ${stepsInput}歩`) : exerciseCategory;
     const newEx = { id: Date.now(), category: exerciseCategory, text: baseText, steps: stepsInput ? parseInt(stepsInput) : null, startTime: startTimeInput || null, duration: durationInput ? parseInt(durationInput) : null, time: new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }) };
-    const target = getRecordForDate(exerciseDate);
-await saveData(
-  updateRecordForDate(exerciseDate, { ...target, exercises: [...target.exercises, newEx] }),
-  'exercise',
-  `${newEx.category}${newEx.duration ? ` ${newEx.duration}分` : ''}${newEx.steps ? ` ${newEx.steps}歩` : ''}`
-);
+    const ok = await mutateRecord(
+      exerciseDate,
+      r => ({ ...r, exercises: [...r.exercises, newEx] }),
+      'exercise',
+      `${newEx.category}${newEx.duration ? ` ${newEx.duration}分` : ''}${newEx.steps ? ` ${newEx.steps}歩` : ''}`
+    );
+    if (!ok) return;
     setExerciseInput(''); setStepsInput(''); setStartTimeInput(''); setDurationInput('');
     setExerciseCategory('ウォーキング'); setExerciseDate(todayKey);
   };
-  const deleteExercise = async (id) => { await saveData(updateTodayRecord({ ...todayRecord, exercises: todayRecord.exercises.filter(e => e.id !== id) })); };
+  const deleteExercise = async (id) => { await mutateRecord(todayKey, r => ({ ...r, exercises: r.exercises.filter(e => e.id !== id) })); };
   const saveMood = async () => {
     if (!moodInput.trim()) return;
-    const target = getRecordForDate(moodDate);
-    await saveData(
-  updateRecordForDate(moodDate, { ...target, mood: moodInput }),
-  'mood',
-  moodInput
-);
+    const ok = await mutateRecord(moodDate, r => ({ ...r, mood: moodInput }), 'mood', moodInput);
+    if (!ok) return;
     setMoodInput(''); setMoodDate(todayKey);
   };
   const handlePhotoSelect = async (e) => {
@@ -197,15 +244,16 @@ await saveData(
   const addMeal = async () => {
     if (!pendingPhoto && !foodNameInput.trim()) return;
     const newMeal = { id: Date.now(), photo: pendingPhoto, category: mealCategory, foodName: foodNameInput || mealCategory, calories: caloriesInput ? parseInt(caloriesInput) : null, time: new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }) };
-    const target = getRecordForDate(mealDate);
-    await saveData(
-  updateRecordForDate(mealDate, { ...target, meals: [...target.meals, newMeal] }),
-  'meal',
-  `${newMeal.category}：${newMeal.foodName}${newMeal.calories ? ` ${newMeal.calories}kcal` : ''}`
-);
+    const ok = await mutateRecord(
+      mealDate,
+      r => ({ ...r, meals: [...r.meals, newMeal] }),
+      'meal',
+      `${newMeal.category}：${newMeal.foodName}${newMeal.calories ? ` ${newMeal.calories}kcal` : ''}`
+    );
+    if (!ok) return;
     setPendingPhoto(null); setFoodNameInput(''); setCaloriesInput(''); setMealCategory('朝食'); setMealDate(todayKey);
   };
-  const deleteMeal = async (id) => { await saveData(updateTodayRecord({ ...todayRecord, meals: todayRecord.meals.filter(m => m.id !== id) })); };
+  const deleteMeal = async (id) => { await mutateRecord(todayKey, r => ({ ...r, meals: r.meals.filter(m => m.id !== id) })); };
 
   const totalSteps = todayRecord.exercises.reduce((s, e) => s + (e.steps || 0), 0);
   const totalDuration = todayRecord.exercises.reduce((s, e) => s + (e.duration || 0), 0);
@@ -260,9 +308,9 @@ await saveData(
           </div>
         </Card>
         <PastRecordsCard records={data.records} comments={data.comments} todayKey={todayKey}
-          onDeleteExercise={async (date, id) => { const r = getRecordForDate(date); await saveData(updateRecordForDate(date, { ...r, exercises: r.exercises.filter(e => e.id !== id) })); }}
-          onDeleteMeal={async (date, id) => { const r = getRecordForDate(date); await saveData(updateRecordForDate(date, { ...r, meals: r.meals.filter(m => m.id !== id) })); }}
-          onDeleteMood={async (date) => { const r = getRecordForDate(date); await saveData(updateRecordForDate(date, { ...r, mood: '' })); }}
+          onDeleteExercise={async (date, id) => { await mutateRecord(date, r => ({ ...r, exercises: r.exercises.filter(e => e.id !== id) })); }}
+          onDeleteMeal={async (date, id) => { await mutateRecord(date, r => ({ ...r, meals: r.meals.filter(m => m.id !== id) })); }}
+          onDeleteMood={async (date) => { await mutateRecord(date, r => ({ ...r, mood: '' })); }}
         />
       </>}
 
@@ -373,15 +421,53 @@ async function compressImage(file, maxSize = 1024, quality = 0.85) {
 }
 
 function formatDate(dateStr) {
-  const d = new Date(dateStr);
+  const [y, m, d] = dateStr.split('-').map(Number);
   const days = ['日', '月', '火', '水', '木', '金', '土'];
-  return `${d.getMonth() + 1}月${d.getDate()}日(${days[d.getDay()]})`;
+  return `${m}月${d}日(${days[new Date(y, m - 1, d).getDay()]})`;
 }
 
 function getJapanDateKey(date) {
   const d = date || new Date();
-  const jstStr = d.toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', year: 'numeric', month: '2-digit', day: '2-digit' });
-  return jstStr.replace(/\//g, '-').replace(/(\d+)-(\d+)-(\d+).*/, '$1-$2-$3');
+  // en-CAロケールは常に YYYY-MM-DD を返すため、端末ごとの書式差の影響を受けない
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tokyo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+}
+
+// recordsテーブルの1行をパースする。壊れた行があってもその行だけ無視する
+function parseRecordRow(row) {
+  try {
+    const rec = JSON.parse(row.data);
+    if (!rec || typeof rec !== 'object') return null;
+    const date = rec.date || row.date;
+    if (!date) return null;
+    return {
+      date,
+      exercises: Array.isArray(rec.exercises) ? rec.exercises : [],
+      meals: Array.isArray(rec.meals) ? rec.meals : [],
+      mood: typeof rec.mood === 'string' ? rec.mood : '',
+    };
+  } catch {
+    console.error('記録データの解析失敗 id=' + row.id);
+    return null;
+  }
+}
+
+// 同一日付の重複行があっても内容を失わないよう、id単位で結合して日付ごと1件にまとめる
+function mergeRecordRows(rows) {
+  const byDate = new Map();
+  const sorted = [...rows].sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+  const mergeById = (a, b) => { const m = new Map(); [...a, ...b].forEach(x => m.set(x.id, x)); return [...m.values()]; };
+  for (const row of sorted) {
+    const rec = parseRecordRow(row);
+    if (!rec) continue;
+    const prev = byDate.get(rec.date);
+    byDate.set(rec.date, prev ? {
+      date: rec.date,
+      exercises: mergeById(prev.exercises, rec.exercises),
+      meals: mergeById(prev.meals, rec.meals),
+      mood: rec.mood || prev.mood,
+    } : rec);
+  }
+  return [...byDate.values()];
 }
 
 function shiftDateKey(dateKey, daysOffset) {
@@ -596,6 +682,7 @@ function Stat({ label, value, unit, small }) {
   return <div style={{ background: '#FAF3E3', borderRadius: '12px', padding: small ? '10px' : '14px', textAlign: 'center' }}><div style={{ fontSize: '11px', color: '#8B5A2B', marginBottom: '4px' }}>{label}</div><div style={{ fontSize: small ? '18px' : '24px', fontWeight: 700, color: '#3D2817' }}>{value}{unit && <span style={{ fontSize: '11px', color: '#8B5A2B', marginLeft: '2px' }}>{unit}</span>}</div></div>;
 }
 
+const errorBannerStyle = { background: '#FDECEA', border: '1px solid #E8A5A5', color: '#8B2B2B', borderRadius: '12px', padding: '12px 14px', marginBottom: '16px', fontSize: '14px', lineHeight: 1.5 };
 const inputStyle = { width: '100%', padding: '12px', fontSize: '15px', border: '2px solid #F0E2C9', borderRadius: '12px', background: '#FFF8E7', color: '#3D2817', fontFamily: 'inherit', boxSizing: 'border-box', outline: 'none' };
 const labelStyle = { display: 'block', fontSize: '12px', color: '#8B5A2B', fontWeight: 600, marginBottom: '4px', marginLeft: '4px' };
 const primaryButtonStyle = { width: '100%', padding: '14px', fontSize: '15px', fontWeight: 700, color: '#FFF8E7', background: 'linear-gradient(135deg, #D4A574 0%, #C8964A 100%)', border: 'none', borderRadius: '12px', cursor: 'pointer', boxShadow: '0 2px 8px rgba(200, 150, 74, 0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' };
@@ -607,7 +694,7 @@ const categoryColors = { '朝食': { bg: '#FFE4B5', fg: '#8B5A2B' }, '昼食': {
 function categoryBadgeStyle(cat) { const c = categoryColors[cat] || categoryColors['食事']; return { display: 'inline-block', padding: '3px 10px', borderRadius: '10px', fontSize: '12px', fontWeight: 700, background: c.bg, color: c.fg, whiteSpace: 'nowrap' }; }
 const exerciseColors = { 'ウォーキング': { bg: '#D4E8C8', fg: '#3D5A2B' }, 'エアロバイク': { bg: '#C8DDE8', fg: '#2B4A5A' }, 'ストレッチ': { bg: '#E8D4D4', fg: '#5A3D3D' }, 'その他': { bg: '#FAF3E3', fg: '#8B5A2B' } };
 function exerciseBadgeStyle(cat) { const c = exerciseColors[cat] || exerciseColors['その他']; return { display: 'inline-block', padding: '3px 10px', borderRadius: '10px', fontSize: '12px', fontWeight: 700, background: c.bg, color: c.fg, whiteSpace: 'nowrap' }; }
-function DaughterView({ data, saveData, todayKey }) {
+function DaughterView({ data, updateComments, todayKey }) {
   const [commentInput, setCommentInput] = useState('');
   const [sending, setSending] = useState(false);
 
@@ -618,25 +705,28 @@ function DaughterView({ data, saveData, todayKey }) {
       id: String(Date.now()),
       text: commentInput,
       timestamp: new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
+      date: todayKey,
     };
     try {
-    await supabase.from('comments').insert({
+      const { error } = await supabase.from('comments').insert({
         id: newComment.id,
         text: newComment.text,
         timestamp: newComment.timestamp,
-        date: todayKey,
+        date: newComment.date,
       });
-      await saveData({ ...data, comments: [newComment, ...data.comments] });
+      if (error) throw error;
+      updateComments(prev => [newComment, ...prev]);
+      setCommentInput('');
     } catch (e) {
       console.error('コメント送信失敗', e);
+      alert('コメントの送信に失敗しました。もう一度お試しください。');
     }
-    setCommentInput('');
     setSending(false);
   };
 
   const deleteComment = async (id) => {
-    await supabase.from('comments').delete().eq('id', id);
-    await saveData({ ...data, comments: data.comments.filter(c => c.id !== id) });
+    const { error } = await supabase.from('comments').delete().eq('id', id);
+    if (!error) updateComments(prev => prev.filter(c => c.id !== id));
   };
 
   const todayRecord = data.records.find(r => r.date === todayKey) || { date: todayKey, exercises: [], meals: [], mood: '' };
