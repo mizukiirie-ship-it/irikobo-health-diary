@@ -50,24 +50,13 @@ export default function HealthApp() {
     if (!force && now - lastLoadRef.current < 10000) return;
     lastLoadRef.current = now;
     let ok = true;
-    // 写真(base64)込みで重いため、直近100日を先に表示してから残りを読む
-    const cutoff = shiftDateKey(getJapanDateKey(), -100);
+    // records_light は写真(base64)を除いた読み取り専用ビュー。
+    // 一覧・グラフはこれで軽く読み、写真は表示する日だけ後から個別取得する。
     try {
-      const { data: recentRows, error } = await supabase
-        .from('records').select('*').gte('date', cutoff).order('date');
+      const { data: rows, error } = await supabase
+        .from('records_light').select('*').order('date');
       if (error) throw error;
-      setData(prev => ({ ...prev, records: mergeRecordRows(recentRows || []) }));
-      setLoaded(true);
-      const { data: olderRows, error: olderError } = await supabase
-        .from('records').select('*').lt('date', cutoff).order('date');
-      if (olderError) throw olderError;
-      if (olderRows && olderRows.length > 0) {
-        setData(prev => {
-          const existingDates = new Set(prev.records.map(r => r.date));
-          const olderRecords = mergeRecordRows(olderRows).filter(r => !existingDates.has(r.date));
-          return { ...prev, records: [...prev.records, ...olderRecords] };
-        });
-      }
+      setData(prev => ({ ...prev, records: mergeRecordRows(rows || []) }));
     } catch (e) {
       console.error('記録の読み込み失敗', e);
       ok = false;
@@ -141,6 +130,7 @@ export default function HealthApp() {
           .from('records').insert({ date, data: json });
         if (insertError) throw insertError;
       }
+      invalidateDayPhotos(date);
       setData(prev => ({ ...prev, records: [...prev.records.filter(r => r.date !== date), updated] }));
       if (notifyType && notifyContent) sendLineNotify(notifyType, notifyContent);
       return true;
@@ -370,7 +360,7 @@ function FatherView({ data, mutateRecord, todayKey }) {
           </div>
           {todayRecord.meals.map(meal => <div key={meal.id} style={{ background: '#FFF8E7', borderRadius: '12px', padding: '12px', marginTop: '12px', position: 'relative' }}>
             <button onClick={() => deleteMeal(meal.id)} style={{ position: 'absolute', top: '8px', right: '8px', background: 'rgba(0,0,0,0.5)', color: '#FFF', border: 'none', borderRadius: '50%', width: '24px', height: '24px', cursor: 'pointer', fontSize: '12px', zIndex: 1 }}>×</button>
-            {meal.photo && <img src={meal.photo} alt={meal.foodName} style={{ width: '100%', borderRadius: '8px', maxHeight: '180px', objectFit: 'cover' }} />}
+            <MealPhoto date={todayKey} meal={meal} style={{ width: '100%', borderRadius: '8px', maxHeight: '180px', objectFit: 'cover' }} />
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '8px', flexWrap: 'wrap' }}>
               {meal.category && <span style={categoryBadgeStyle(meal.category)}>{meal.category}</span>}
               <h4 style={{ margin: 0, color: '#3D2817', fontSize: '15px', flex: 1 }}>{meal.foodName}</h4>
@@ -391,7 +381,47 @@ function FatherView({ data, mutateRecord, todayKey }) {
   );
 }
 
-async function compressImage(file, maxSize = 1024, quality = 0.85) {
+// 写真(base64)は一覧の軽量読み込みには含めず、表示する日だけ後から取得してキャッシュする。
+// キーは日付。同じ日の複数の写真が同時に要求されても取得は1回にまとめる。
+const dayPhotoCache = new Map(); // date -> Promise<Map<mealId, photoDataUrl>>
+function invalidateDayPhotos(date) { dayPhotoCache.delete(date); }
+function fetchDayPhotos(date) {
+  if (dayPhotoCache.has(date)) return dayPhotoCache.get(date);
+  const p = (async () => {
+    const map = new Map();
+    try {
+      const { data: rows } = await supabase.from('records').select('data').eq('date', date);
+      if (rows && rows[0]) {
+        const rec = JSON.parse(rows[0].data);
+        (rec.meals || []).forEach(m => { if (m && m.photo) map.set(m.id, m.photo); });
+      }
+    } catch (e) {
+      console.error('写真の読み込み失敗', e);
+      dayPhotoCache.delete(date); // 失敗は次回再試行できるようキャッシュしない
+    }
+    return map;
+  })();
+  dayPhotoCache.set(date, p);
+  return p;
+}
+
+// meal に photo が既にあればそれを、無ければ hasPhoto の場合だけその日の写真を遅延取得して表示する
+function MealPhoto({ date, meal, style, onClick }) {
+  const [src, setSrc] = useState(meal.photo || null);
+  useEffect(() => {
+    let alive = true;
+    if (meal.photo) { setSrc(meal.photo); return; }
+    setSrc(null);
+    if (meal.hasPhoto) {
+      fetchDayPhotos(date).then(map => { if (alive) setSrc(map.get(meal.id) || null); });
+    }
+    return () => { alive = false; };
+  }, [date, meal.id, meal.photo, meal.hasPhoto]);
+  if (!src) return null;
+  return <img src={src} alt={meal.foodName} onClick={onClick ? () => onClick(src) : undefined} style={style} />;
+}
+
+async function compressImage(file, maxSize = 800, quality = 0.6) {
   const dataUrl = await new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result);
@@ -579,7 +609,7 @@ function PastRecordsCard({ records, comments, todayKey, onDeleteExercise, onDele
         <strong style={{ fontSize: '12px', color: '#8B5A2B' }}>🍱 食事</strong>
         {r.meals.map(meal => <div key={meal.id} style={{ background: '#FAF3E3', borderRadius: '8px', padding: '8px', marginTop: '6px', position: 'relative' }}>
           <button onClick={() => onDeleteMeal(dateKey, meal.id)} style={{ position: 'absolute', top: '6px', right: '6px', background: 'rgba(0,0,0,0.4)', color: '#FFF', border: 'none', borderRadius: '50%', width: '22px', height: '22px', cursor: 'pointer', fontSize: '12px', padding: 0, zIndex: 1 }}>×</button>
-          {meal.photo && <img src={meal.photo} alt={meal.foodName} onClick={() => setSelectedPhoto(meal)} style={{ width: '100%', borderRadius: '6px', maxHeight: '160px', objectFit: 'cover', cursor: 'pointer', marginBottom: '6px' }} />}
+          <MealPhoto date={dateKey} meal={meal} onClick={(src) => setSelectedPhoto({ ...meal, photo: src })} style={{ width: '100%', borderRadius: '6px', maxHeight: '160px', objectFit: 'cover', cursor: 'pointer', marginBottom: '6px' }} />
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', paddingRight: '24px' }}>
             {meal.category && <span style={categoryBadgeStyle(meal.category)}>{meal.category}</span>}
             <span style={{ fontSize: '13px', color: '#3D2817', flex: 1 }}>{meal.foodName}</span>
